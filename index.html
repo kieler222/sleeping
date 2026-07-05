@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="theme-color" content="#4f46e5">
-  <title>Schlaf-Tracker</title>
+  <title>Lenn's Schlaf-Tracker</title>
   <style>
     :root {
       --bg: #0f172a;
@@ -38,13 +38,15 @@
     .status {
       background: var(--card);
       border-radius: var(--radius);
-      padding: 14px 16px;
+      padding: 16px;
       margin-bottom: 20px;
       text-align: center;
-      font-size: 0.95rem;
-      color: var(--muted);
     }
-    .status strong { color: var(--text); }
+    .status .big { font-size: 1.15rem; font-weight: 700; }
+    .status .sub { color: var(--muted); font-size: 0.9rem; margin-top: 4px; }
+    .status .duration { font-size: 1.6rem; font-weight: 800; margin-top: 6px; letter-spacing: 0.02em; }
+    .status.sleeping .duration { color: var(--sleep); }
+    .status.awake .duration { color: var(--wake); }
 
     .buttons { display: grid; gap: 12px; margin-bottom: 28px; }
     button.action {
@@ -72,6 +74,24 @@
     .icon { font-size: 1.4rem; }
 
     h2 { font-size: 1.05rem; margin: 0 0 12px; color: var(--muted); font-weight: 600; }
+
+    /* Chart */
+    .chart-card { background: var(--card); border-radius: var(--radius); padding: 16px; margin-bottom: 28px; }
+    .chart-legend { display: flex; gap: 16px; justify-content: center; margin-bottom: 14px; font-size: 0.82rem; color: var(--muted); }
+    .chart-legend span { display: inline-flex; align-items: center; gap: 6px; }
+    .swatch { width: 14px; height: 14px; border-radius: 4px; display: inline-block; }
+    .swatch.sleep { background: var(--sleep); }
+    .swatch.wake { background: var(--wake); }
+    .timeline {
+      position: relative; height: 34px; border-radius: 8px; overflow: hidden;
+      background: var(--card-soft);
+    }
+    .seg-block { position: absolute; top: 0; bottom: 0; }
+    .seg-block.sleep { background: var(--sleep); }
+    .seg-block.wake { background: var(--wake); }
+    .axis { position: relative; height: 16px; margin-top: 4px; }
+    .tick { position: absolute; transform: translateX(-50%); font-size: 0.65rem; color: var(--muted); }
+    .chart-empty { color: var(--muted); text-align: center; font-size: 0.85rem; padding: 8px 0; }
 
     .entries { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 10px; }
     .entry {
@@ -128,9 +148,9 @@
     }
     .seg button.sel-sleep { border-color: var(--sleep); background: rgba(99,102,241,0.2); }
     .seg button.sel-wake  { border-color: var(--wake); background: rgba(245,158,11,0.2); }
-    input[type="datetime-local"] {
+    input[type="time"] {
       width: 100%; padding: 14px; border-radius: 12px; border: 1px solid var(--card-soft);
-      background: var(--card-soft); color: var(--text); font-size: 1rem;
+      background: var(--card-soft); color: var(--text); font-size: 1.1rem;
     }
     .modal-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 8px; }
     .modal-actions button {
@@ -150,11 +170,11 @@
 </head>
 <body>
   <header>
-    <h1>🌙 Schlaf-Tracker</h1>
-    <p>Wann schläft und wacht unser Sohn?</p>
+    <h1>🌙 Lenn's Schlaf-Tracker</h1>
+    <p>Wann schläft und wacht Lenn?</p>
   </header>
 
-  <div class="status" id="status">Noch keine Einträge heute</div>
+  <div class="status" id="status">Noch keine Einträge</div>
 
   <div class="buttons">
     <button class="action btn-sleep" onclick="quickLog('sleep')">
@@ -166,6 +186,17 @@
     <button class="action btn-manual" onclick="openModal()">
       <span class="icon">✏️</span> Zeit manuell eintragen
     </button>
+  </div>
+
+  <h2>Schlaf- & Wachzeiten (letzte 24 Std)</h2>
+  <div class="chart-card">
+    <div class="chart-legend">
+      <span><span class="swatch sleep"></span> Schläft</span>
+      <span><span class="swatch wake"></span> Wach</span>
+    </div>
+    <div class="timeline" id="timeline"></div>
+    <div class="axis" id="axis"></div>
+    <div class="chart-empty" id="chartEmpty" style="display:none;">Noch keine Daten für die Grafik</div>
   </div>
 
   <h2>Verlauf</h2>
@@ -183,8 +214,8 @@
         </div>
       </div>
       <div class="field">
-        <label>Wann?</label>
-        <input type="datetime-local" id="manualTime">
+        <label>Um wie viel Uhr?</label>
+        <input type="time" id="manualTime" step="300">
       </div>
       <div class="modal-actions">
         <button class="btn-cancel" onclick="closeModal()">Abbrechen</button>
@@ -197,6 +228,7 @@
 
   <script>
     const STORAGE_KEY = 'schlaf-tracker-entries';
+    const FIVE_MIN = 1000 * 60 * 5;
     let entries = load();
     let manualType = 'sleep';
 
@@ -209,10 +241,16 @@
       localStorage.setItem(STORAGE_KEY, JSON.stringify(entries));
     }
 
+    // Round a Date to the nearest 5 minutes
+    function round5(d) {
+      return new Date(Math.round(d.getTime() / FIVE_MIN) * FIVE_MIN);
+    }
+
     function quickLog(type) {
-      addEntry(type, new Date().toISOString());
+      const t = round5(new Date());
+      addEntry(type, t.toISOString());
       const label = type === 'sleep' ? 'Eingeschlafen' : 'Aufgewacht';
-      showToast(label + ' um ' + formatTime(new Date().toISOString()) + ' ✓');
+      showToast(label + ' um ' + formatTime(t.toISOString()) + ' ✓');
     }
 
     function addEntry(type, iso) {
@@ -232,7 +270,9 @@
     function openModal() {
       manualType = 'sleep';
       selectType('sleep');
-      document.getElementById('manualTime').value = toLocalInput(new Date());
+      const now = round5(new Date());
+      const pad = n => String(n).padStart(2, '0');
+      document.getElementById('manualTime').value = pad(now.getHours()) + ':' + pad(now.getMinutes());
       document.getElementById('overlay').classList.add('open');
     }
     function closeModal() {
@@ -245,8 +285,12 @@
     }
     function saveManual() {
       const val = document.getElementById('manualTime').value;
-      if (!val) { showToast('Bitte eine Zeit wählen'); return; }
-      addEntry(manualType, new Date(val).toISOString());
+      if (!val) { showToast('Bitte eine Uhrzeit wählen'); return; }
+      const [h, m] = val.split(':').map(Number);
+      const d = new Date();
+      d.setHours(h, m, 0, 0);
+      const rounded = round5(d);
+      addEntry(manualType, rounded.toISOString());
       closeModal();
       showToast('Eintrag gespeichert ✓');
     }
@@ -278,26 +322,96 @@
         }
         list.innerHTML = html;
       }
+      renderChart();
       renderStatus();
     }
 
     function renderStatus() {
       const status = document.getElementById('status');
+      status.className = 'status';
       if (entries.length === 0) {
         status.textContent = 'Noch keine Einträge';
         return;
       }
-      const last = entries[0];
+      const last = entries[0]; // newest
       const isSleep = last.type === 'sleep';
-      status.innerHTML = isSleep
-        ? `Schläft seit <strong>${formatTime(last.time)}</strong> 😴`
-        : `Wach seit <strong>${formatTime(last.time)}</strong> ☀️`;
+      const since = new Date(last.time);
+      const dur = formatDuration(Date.now() - since.getTime());
+      status.classList.add(isSleep ? 'sleeping' : 'awake');
+      status.innerHTML =
+        `<div class="big">${isSleep ? '😴 Lenn schläft' : '☀️ Lenn ist wach'}</div>` +
+        `<div class="duration">seit ${dur}</div>` +
+        `<div class="sub">${isSleep ? 'Eingeschlafen' : 'Aufgewacht'} um ${formatTime(last.time)}</div>`;
+    }
+
+    // Sleep/wake timeline for the last 24 hours
+    function renderChart() {
+      const timeline = document.getElementById('timeline');
+      const axis = document.getElementById('axis');
+      const emptyEl = document.getElementById('chartEmpty');
+      const now = Date.now();
+      const windowMs = 24 * 60 * 60 * 1000;
+      const start = now - windowMs;
+
+      if (entries.length === 0) {
+        timeline.innerHTML = '';
+        axis.innerHTML = '';
+        emptyEl.style.display = 'block';
+        return;
+      }
+      emptyEl.style.display = 'none';
+
+      // entries are newest-first; work with ascending order
+      const asc = [...entries].sort((a, b) => new Date(a.time) - new Date(b.time));
+
+      // Build segments [from, to, state] across the whole history, then clip to window.
+      const segs = [];
+      // State before the first event = opposite of that first event
+      const firstT = new Date(asc[0].time).getTime();
+      const beforeState = asc[0].type === 'sleep' ? 'wake' : 'sleep';
+      segs.push({ from: start, to: firstT, state: beforeState });
+      for (let i = 0; i < asc.length; i++) {
+        const from = new Date(asc[i].time).getTime();
+        const to = i + 1 < asc.length ? new Date(asc[i + 1].time).getTime() : now;
+        const state = asc[i].type === 'sleep' ? 'sleep' : 'wake';
+        segs.push({ from, to, state });
+      }
+
+      let html = '';
+      for (const s of segs) {
+        const from = Math.max(s.from, start);
+        const to = Math.min(s.to, now);
+        if (to <= from) continue;
+        const left = ((from - start) / windowMs) * 100;
+        const width = ((to - from) / windowMs) * 100;
+        html += `<div class="seg-block ${s.state}" style="left:${left}%;width:${width}%"></div>`;
+      }
+      timeline.innerHTML = html;
+
+      // Hour ticks every 6 hours
+      let ticks = '';
+      for (let i = 0; i <= 4; i++) {
+        const t = new Date(start + (windowMs * i) / 4);
+        const pct = i * 25;
+        const label = t.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+        ticks += `<span class="tick" style="left:${pct}%">${label}</span>`;
+      }
+      axis.innerHTML = ticks;
     }
 
     // Helpers
     function formatTime(iso) {
       const d = new Date(iso);
       return d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }) + ' Uhr';
+    }
+    function formatDuration(ms) {
+      if (ms < 0) ms = 0;
+      const totalMin = Math.floor(ms / 60000);
+      const h = Math.floor(totalMin / 60);
+      const m = totalMin % 60;
+      if (h === 0) return m + ' Min';
+      if (m === 0) return h + ' Std';
+      return h + ' Std ' + m + ' Min';
     }
     function dayLabel(iso) {
       const d = new Date(iso);
@@ -309,11 +423,6 @@
     }
     function sameDay(a, b) {
       return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
-    }
-    function toLocalInput(d) {
-      const pad = n => String(n).padStart(2, '0');
-      return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate())
-        + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
     }
     let toastTimer;
     function showToast(msg) {
@@ -330,6 +439,8 @@
     });
 
     render();
+    // Keep live duration + chart fresh
+    setInterval(() => { renderStatus(); renderChart(); }, 30000);
   </script>
 </body>
 </html>
